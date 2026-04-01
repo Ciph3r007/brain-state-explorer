@@ -1,86 +1,101 @@
 import * as THREE from 'three';
 
-/**
- * Per-region geometry factory. Returns anatomically suggestive BufferGeometry
- * for each brain region. Cortical regions use smooth lobe-shaped ellipsoids
- * with sulci folds. Deep regions get distinct anatomical shapes.
- */
+// ─── Brain Surface Geometry (vertex-painted cortical surface) ──────
 
-/** Apply sulci-like wrinkle displacement along normals */
-function addSulci(geo, amplitude = 0.025, freq = { x: 14, y: 10, z: 8 }) {
+/**
+ * Creates a high-resolution brain-shaped mesh for the vertex-painted cortical surface.
+ * Same deformations as the glass shell but with much deeper sulci for anatomical realism.
+ * Pre-allocates a color buffer attribute for per-frame vertex color updates.
+ */
+export function createBrainSurfaceGeometry(widthSegs = 96, heightSegs = 72, scale = 0.97) {
+  const geo = new THREE.SphereGeometry(1.0, widthSegs, heightSegs);
   const pos = geo.attributes.position;
-  geo.computeVertexNormals();
-  const norm = geo.attributes.normal;
+  const normal = geo.attributes.normal;
   const v = new THREE.Vector3();
   const n = new THREE.Vector3();
 
   for (let i = 0; i < pos.count; i++) {
     v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
-    n.set(norm.getX(i), norm.getY(i), norm.getZ(i));
-    // Multi-frequency sulci pattern for realism
-    const primary = Math.sin(v.x * freq.x + v.z * freq.z) * Math.cos(v.y * freq.y);
-    const secondary = Math.sin(v.y * freq.x * 0.7 + v.x * freq.y * 0.5) * 0.4;
-    const disp = (primary + secondary) * amplitude;
-    v.addScaledVector(n, disp);
+    n.set(normal.getX(i), normal.getY(i), normal.getZ(i));
+
+    // Front-to-back elongation (same as glass shell)
+    v.z *= 1.15;
+
+    // Deep interhemispheric fissure — the most recognizable brain feature
+    const midlineDist = Math.abs(v.x);
+    const fissureDepth = 0.35 * Math.exp(-midlineDist * midlineDist / 0.008);
+    const topFactor = THREE.MathUtils.smoothstep(v.y, -0.2, 0.15);
+    v.x *= 1 - fissureDepth * topFactor;
+    // Also push vertices inward at the fissure for a visible groove
+    if (topFactor > 0.1) {
+      const inwardPush = fissureDepth * topFactor * 0.08;
+      v.y -= inwardPush;
+    }
+
+    // Flatten bottom
+    if (v.y < -0.3) {
+      v.y = -0.3 + (v.y + 0.3) * 0.4;
+    }
+
+    // 3-octave sulci displacement — deep, dramatic brain folds
+    const freq1 = Math.sin(v.x * 12 + v.y * 8) * Math.sin(v.z * 10 + v.y * 6);
+    const freq2 = Math.sin(v.x * 24 + v.z * 18) * Math.cos(v.y * 20 + v.x * 14);
+    const freq3 = Math.sin(v.y * 36 + v.x * 28) * Math.sin(v.z * 32);
+    const sulciNoise = freq1 * 0.09 + freq2 * 0.04 + freq3 * 0.015;
+    v.addScaledVector(n, sulciNoise);
+
+    // Scale down to nest inside the glass shell
+    v.multiplyScalar(scale);
+
     pos.setXYZ(i, v.x, v.y, v.z);
   }
+
   geo.computeVertexNormals();
+
+  // Pre-allocate color buffer for per-frame updates
+  const colors = new Float32Array(pos.count * 3);
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
   return geo;
 }
 
 /**
- * Cortical lobe — smooth ellipsoid with flattened inner face and sulci wrinkles.
- * Looks like an organic brain lobe, not a geometric cap.
- * @param {object} opts - flatten direction & sulci params
+ * Computes inverse-distance weights mapping each vertex to cortical regions.
+ * Returns Float32Array of length vertexCount * regionCount.
+ *
+ * @param {BufferGeometry} geometry - brain surface geometry
+ * @param {Array<{id: string, pos: number[]}>} corticalRegions - region positions
+ * @param {number} power - distance falloff power (higher = sharper boundaries)
  */
-function createCorticalLobe(opts = {}) {
-  const { flattenAxis = 'z', flattenDir = -1, flattenAmount = 0.3, sulciAmp = 0.025 } = opts;
-  const geo = new THREE.SphereGeometry(1, 24, 18);
-  const pos = geo.attributes.position;
+export function computeRegionWeights(geometry, corticalRegions, power = 3.5) {
+  const pos = geometry.attributes.position;
+  const regionCount = corticalRegions.length;
+  const weights = new Float32Array(pos.count * regionCount);
   const v = new THREE.Vector3();
+
+  const regionVecs = corticalRegions.map(r => new THREE.Vector3(...r.pos));
 
   for (let i = 0; i < pos.count; i++) {
     v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
 
-    // Flatten the inner face — the side that faces the brain interior
-    const axisVal = v[flattenAxis];
-    if (Math.sign(axisVal) === flattenDir) {
-      // Compress vertices on the inner side to create a flat-backed lobe
-      const t = Math.abs(axisVal); // 0 at equator, 1 at pole
-      v[flattenAxis] *= (1 - flattenAmount * t);
+    let totalWeight = 0;
+    for (let j = 0; j < regionCount; j++) {
+      const dist = v.distanceTo(regionVecs[j]);
+      const w = 1 / (Math.pow(dist, power) + 0.001);
+      weights[i * regionCount + j] = w;
+      totalWeight += w;
     }
 
-    pos.setXYZ(i, v.x, v.y, v.z);
+    // Normalize
+    for (let j = 0; j < regionCount; j++) {
+      weights[i * regionCount + j] /= totalWeight;
+    }
   }
 
-  geo.computeVertexNormals();
-  addSulci(geo, sulciAmp);
-  return geo;
+  return weights;
 }
 
-/** PFC — wide frontal lobe, flattened on the back face */
-function createPFC() {
-  return createCorticalLobe({ flattenAxis: 'z', flattenDir: -1, flattenAmount: 0.35, sulciAmp: 0.025 });
-}
-
-/** Parietal — broad dome, flattened on bottom */
-function createParietal() {
-  return createCorticalLobe({ flattenAxis: 'y', flattenDir: -1, flattenAmount: 0.4, sulciAmp: 0.02 });
-}
-
-/** Temporal — elongated side lobe, flattened on medial face */
-function createTemporalL() {
-  return createCorticalLobe({ flattenAxis: 'x', flattenDir: 1, flattenAmount: 0.35, sulciAmp: 0.025 });
-}
-
-function createTemporalR() {
-  return createCorticalLobe({ flattenAxis: 'x', flattenDir: -1, flattenAmount: 0.35, sulciAmp: 0.025 });
-}
-
-/** Occipital — rear lobe, flattened on front face */
-function createOccipital() {
-  return createCorticalLobe({ flattenAxis: 'z', flattenDir: 1, flattenAmount: 0.35, sulciAmp: 0.02 });
-}
+// ─── Deep Structure Geometry Factory ───────────────────────────────
 
 // ─── Deep structures ───────────────────────────────────────────────
 
@@ -324,11 +339,7 @@ export function createRegionGeometry(id) {
 
   let geo;
   switch (id) {
-    case 'pfc':        geo = createPFC(); break;
-    case 'parietal':   geo = createParietal(); break;
-    case 'temporal_l': geo = createTemporalL(); break;
-    case 'temporal_r': geo = createTemporalR(); break;
-    case 'occipital':  geo = createOccipital(); break;
+    // Deep structures only — cortical regions are now vertex-painted on the brain surface
     case 'thalamus':     geo = createThalamus(); break;
     case 'hypothalamus': geo = createHypothalamus(); break;
     case 'hippocampus':  geo = createHippocampus(); break;
