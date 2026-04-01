@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
-import { Bloom, EffectComposer } from '@react-three/postprocessing';
+import { Bloom, EffectComposer, N8AO } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import BrainModel from './BrainModel';
 import { REGIONS } from '../data/regions';
@@ -68,9 +68,14 @@ export default function BrainScene() {
       <SceneUpdater />
 
       <EffectComposer>
+        <N8AO
+          aoRadius={0.5}
+          intensity={1.5}
+          distanceFalloff={0.3}
+        />
         <Bloom
           intensity={1.0}
-          luminanceThreshold={0.15}
+          luminanceThreshold={0.3}
           luminanceSmoothing={0.9}
           mipmapBlur
         />
