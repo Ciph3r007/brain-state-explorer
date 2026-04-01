@@ -37,12 +37,28 @@ export function createBrainSurfaceGeometry(widthSegs = 96, heightSegs = 72, scal
       v.y = -0.3 + (v.y + 0.3) * 0.4;
     }
 
+    // Central sulcus — separates frontal and parietal lobes
+    // Runs roughly coronal (x-direction) at z ≈ 0.15
+    const centralSulcusDist = Math.abs(v.z - 0.15);
+    const centralSulcus = -0.04 * Math.exp(-centralSulcusDist * centralSulcusDist / 0.005)
+      * THREE.MathUtils.smoothstep(v.y, -0.1, 0.2)   // only on upper brain
+      * (1 - Math.exp(-v.x * v.x / 0.15));            // not at midline
+
+    // Sylvian (lateral) fissure — separates temporal from frontal/parietal
+    // Runs roughly horizontal on each side at y ≈ 0, tilting up posteriorly
+    const sylvianY = -0.05 + v.z * 0.15; // tilts up toward back
+    const sylvianDist = Math.abs(v.y - sylvianY);
+    const lateralness = Math.abs(v.x);
+    const sylvianFissure = -0.035 * Math.exp(-sylvianDist * sylvianDist / 0.004)
+      * THREE.MathUtils.smoothstep(lateralness, 0.2, 0.5)  // only on sides
+      * THREE.MathUtils.smoothstep(v.z, -0.5, 0.0);         // mainly anterior
+
     // 3-octave sulci displacement — deep, dramatic brain folds
     const freq1 = Math.sin(v.x * 12 + v.y * 8) * Math.sin(v.z * 10 + v.y * 6);
     const freq2 = Math.sin(v.x * 24 + v.z * 18) * Math.cos(v.y * 20 + v.x * 14);
     const freq3 = Math.sin(v.y * 36 + v.x * 28) * Math.sin(v.z * 32);
     const sulciNoise = freq1 * 0.09 + freq2 * 0.04 + freq3 * 0.015;
-    v.addScaledVector(n, sulciNoise);
+    v.addScaledVector(n, sulciNoise + centralSulcus + sylvianFissure);
 
     // Scale down to nest inside the glass shell
     v.multiplyScalar(scale);
