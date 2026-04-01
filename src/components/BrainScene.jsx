@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
-import { Bloom, EffectComposer } from '@react-three/postprocessing';
+import { Bloom, EffectComposer, N8AO } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import BrainModel from './BrainModel';
 import { REGIONS } from '../data/regions';
@@ -60,17 +60,21 @@ export default function BrainScene() {
         enableDamping
       />
 
-      <ambientLight intensity={0.3} />
-      <directionalLight position={[5, 5, 5]} intensity={0.8} />
-      <directionalLight position={[-3, -2, -4]} intensity={0.3} color="#6366f1" />
-      <pointLight position={[0, 0, 0]} intensity={0.5} color="#8b5cf6" distance={3} />
+      <ambientLight intensity={0.2} />
+      <pointLight position={[0, 0, 0]} intensity={0.6} color="#8b5cf6" distance={3} />
+      <pointLight position={[0, 0.5, 1]} intensity={0.15} color="#6366f1" distance={4} />
 
       <BrainModel />
       <SceneUpdater />
 
       <EffectComposer>
+        <N8AO
+          aoRadius={0.5}
+          intensity={1.5}
+          distanceFalloff={0.3}
+        />
         <Bloom
-          intensity={0.6}
+          intensity={1.0}
           luminanceThreshold={0.3}
           luminanceSmoothing={0.9}
           mipmapBlur

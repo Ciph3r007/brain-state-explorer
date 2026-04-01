@@ -6,8 +6,10 @@ import PathwayLegend from './PathwayLegend';
 export default function InfoPanel() {
   const currentState = useStore(s => s.currentState);
   const hoveredRegion = useStore(s => s.hoveredRegion);
+  const getEffectiveState = useStore(s => s.getEffectiveState);
   const state = STATES[currentState];
   if (!state) return null;
+  const effectiveState = getEffectiveState();
 
   return (
     <div className="panel right-panel">
@@ -21,7 +23,7 @@ export default function InfoPanel() {
           <strong>{REGIONS[hoveredRegion].name}</strong>
           <div className="region-role">{REGIONS[hoveredRegion].role}</div>
           <div className="region-activity">
-            Activity: {Math.round(state.regionActivity[getStateKey(hoveredRegion)] ?? 0)}%
+            Activity: {Math.round(effectiveState.regionActivity[getStateKey(hoveredRegion)] ?? 0)}%
           </div>
         </div>
       )}
@@ -51,14 +53,19 @@ export default function InfoPanel() {
         <PathwayLegend />
       </div>
 
-      {/* Region activity bars */}
+      {/* Region activity bars — sorted by activity, uses effective state for compare mode */}
       <div className="info-section">
         <h3>Region Activity</h3>
         <div className="region-bars">
-          {Object.entries(REGIONS).filter(([id]) => !['temporal_r'].includes(id)).map(([id, r]) => {
-            const key = getStateKey(id);
-            const val = Math.round(state.regionActivity[key] ?? 0);
-            return (
+          {Object.entries(REGIONS)
+            .filter(([id]) => id !== 'temporal_r')
+            .map(([id, r]) => {
+              const key = getStateKey(id);
+              const val = Math.round(effectiveState.regionActivity[key] ?? 0);
+              return { id, r, val };
+            })
+            .sort((a, b) => b.val - a.val)
+            .map(({ id, r, val }) => (
               <div key={id} className="region-bar-row">
                 <span className="region-bar-label">{r.name.replace(' (L)', '')}</span>
                 <div className="region-bar-track">
@@ -69,8 +76,7 @@ export default function InfoPanel() {
                 </div>
                 <span className="region-bar-val">{val}</span>
               </div>
-            );
-          })}
+            ))}
         </div>
       </div>
     </div>
