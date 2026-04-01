@@ -2,6 +2,7 @@ import { useRef, useMemo } from 'react';
 import * as THREE from 'three';
 import { REGIONS } from '../data/regions';
 import BrainRegion from './BrainRegion';
+import BrainSurface from './BrainSurface';
 import PathwaysGroup from './Pathways';
 
 /**
@@ -47,8 +48,8 @@ function createBrainGeometry() {
   return geo;
 }
 
-/** Cerebellum — separate ellipsoid at back-bottom */
-function Cerebellum() {
+/** Cerebellum glass shell — separate ellipsoid at back-bottom */
+function CerebellumShell() {
   return (
     <mesh position={[0, -0.45, -0.7]} scale={[0.45, 0.25, 0.3]}>
       <sphereGeometry args={[1, 32, 24]} />
@@ -93,9 +94,9 @@ export default function BrainModel() {
         <meshPhysicalMaterial
           color="#1a1a2e"
           transparent
-          transmission={0.92}
-          thickness={0.5}
-          roughness={0.1}
+          transmission={0.96}
+          thickness={0.2}
+          roughness={0.05}
           ior={1.1}
           envMapIntensity={0.3}
           depthWrite={false}
@@ -106,13 +107,21 @@ export default function BrainModel() {
       {/* Wireframe overlay for structure readability */}
       <WireframeOverlay geometry={brainGeo} />
 
-      {/* Cerebellum */}
-      <Cerebellum />
+      {/* Vertex-painted cortical brain surface */}
+      <BrainSurface />
 
-      {/* Brain regions */}
-      {Object.entries(REGIONS).map(([id, data]) => (
-        <BrainRegion key={id} id={id} data={data} />
-      ))}
+      {/* Cerebellum glass shell */}
+      <CerebellumShell />
+
+      {/* Deep brain regions only (cortical regions are painted on the surface) */}
+      {Object.entries(REGIONS)
+        .filter(([, data]) => data.deep)
+        .map(([id, data]) => (
+          <BrainRegion key={id} id={id} data={data} />
+        ))}
+
+      {/* Cerebellum as a region mesh (activity-driven, inside its glass shell) */}
+      <BrainRegion id="cerebellum" data={REGIONS.cerebellum} />
 
       {/* Neural pathways */}
       <PathwaysGroup />
