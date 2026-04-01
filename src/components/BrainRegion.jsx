@@ -4,16 +4,16 @@ import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { getStateKey } from '../data/regions';
 import { useStore } from '../hooks/useStore';
+import { createRegionGeometry } from '../utils/regionGeometry';
 
 const _color = new THREE.Color();
 const _emissive = new THREE.Color();
+const _sheenColor = new THREE.Color();
 
-// Abbreviated labels for always-on display
 const ABBREV = {
-  pfc: 'PFC', parietal: 'PAR', temporal_l: 'TL', temporal_r: 'TR',
-  occipital: 'OCC', thalamus: 'THL', hypothalamus: 'HYP', hippocampus: 'HPC',
-  amygdala: 'AMY', cerebellum: 'CBL', brainstem: 'BST', insula: 'INS',
-  cingulate: 'CNG', basalganglia: 'BG',
+  thalamus: 'THL', hypothalamus: 'HYP', hippocampus: 'HPC',
+  amygdala: 'AMY', cerebellum: 'CBL', brainstem: 'BST',
+  insula: 'INS', cingulate: 'CNG', basalganglia: 'BG',
 };
 
 /** Radial gradient texture for glow sprites */
@@ -33,38 +33,7 @@ const glowTexture = (() => {
   return tex;
 })();
 
-/** Thin dashed line from a deep node toward the shell surface */
-function DepthAnchor({ pos }) {
-  const points = useMemo(() => {
-    const origin = new THREE.Vector3(...pos);
-    // Project outward to shell surface (normalize and scale to shell radius ~1.0)
-    const dir = origin.clone().normalize().multiplyScalar(1.05);
-    return [origin, dir];
-  }, [pos]);
-
-  return (
-    <line>
-      <bufferGeometry>
-        <bufferAttribute
-          attach="attributes-position"
-          count={2}
-          array={new Float32Array([...points[0].toArray(), ...points[1].toArray()])}
-          itemSize={3}
-        />
-      </bufferGeometry>
-      <lineDashedMaterial
-        color="#ffffff"
-        transparent
-        opacity={0.12}
-        dashSize={0.03}
-        gapSize={0.03}
-        depthWrite={false}
-      />
-    </line>
-  );
-}
-
-/** Single brain region — compact glowing node with glow halo and label */
+/** Deep brain region — anatomically shaped mesh with tissue material */
 export default function BrainRegion({ id, data }) {
   const meshRef = useRef();
   const spriteRef = useRef();
@@ -81,37 +50,69 @@ export default function BrainRegion({ id, data }) {
   const isHovered = hoveredRegion === id;
   const showLabel = isFocused || isHovered;
 
+  const geometry = useMemo(() => createRegionGeometry(id), [id]);
+
+  // Normalized scale: aspect ratio from region data, capped to reasonable size
+  const baseScale = useMemo(() => {
+    const raw = data.scale
+      || (id === 'hippocampus' ? [0.3, 0.25, 0.3]
+        : id === 'cingulate' ? [0.2, 0.2, 0.25]
+        : [0.15, 0.15, 0.15]);
+    const maxExtent = Math.max(...raw);
+    const targetSize = 0.18;
+    const factor = targetSize / maxExtent;
+    return [raw[0] * factor, raw[1] * factor, raw[2] * factor];
+  }, [id, data.scale]);
+
   useFrame((clock) => {
     if (!meshRef.current) return;
     const state = getEffectiveState();
     const activity = (state.regionActivity[stateKey] ?? 50) / 100;
     const time = clock.clock.elapsedTime;
 
-    // Activity-driven size: small when inactive, doubles at max
-    const baseRadius = 0.06 + activity * 0.08;
+    // Deep regions: size responds to activity (0.7–1.3x)
+    const scaleMultiplier = 0.7 + activity * 0.6;
 
-    // Pulse: breathing + activity-driven frequency
-    const breathing = Math.sin(time * 0.8) * 0.008;
-    const actPulse = Math.sin(time * (1.5 + activity * 3)) * 0.02 * activity;
+    // Pulse: breathing + activity-driven
+    const breathing = Math.sin(time * 0.8) * 0.015;
+    const actPulse = Math.sin(time * (1.5 + activity * 3)) * 0.04 * activity;
     const noise = Math.sin(time * 7.3 + id.charCodeAt(0)) * 0.004;
     const pulse = 1 + breathing + actPulse + noise;
 
-    const focusScale = isFocused ? 1.3 : 1;
-    const r = baseRadius * pulse * focusScale;
-    meshRef.current.scale.setScalar(r);
+    const focusScale = isFocused ? 1.2 : 1;
+    const s = scaleMultiplier * pulse * focusScale;
+
+    meshRef.current.scale.set(
+      baseScale[0] * s,
+      baseScale[1] * s,
+      baseScale[2] * s
+    );
 
     // Dim non-focused regions
     const dimFactor = (focusedRegion && !isFocused) ? 0.35 : 1;
 
-    // Emissive glow driven by activity — toneMapped=false enables bloom
+    // Strong emissive glow to read through glass shell
+    const emissiveStrength = (0.3 + activity * 2.5) * dimFactor;
+
     _color.set(color);
-    _emissive.set(color).multiplyScalar((0.2 + activity * 2.0) * dimFactor);
+    _emissive.set(color).multiplyScalar(emissiveStrength);
+
+    // Sheen color: desaturated at low activity
+    _sheenColor.set(color);
+    const hsl = {};
+    _sheenColor.getHSL(hsl);
+    _sheenColor.setHSL(hsl.h, hsl.s * (0.3 + activity * 0.7), hsl.l);
+
     const mat = meshRef.current.material;
     mat.color.lerp(_color, 0.1);
     mat.emissive.lerp(_emissive, 0.1);
-    mat.opacity = THREE.MathUtils.lerp(mat.opacity, (0.7 + activity * 0.3) * dimFactor, 0.1);
+    mat.sheenColor.lerp(_sheenColor, 0.1);
 
-    // Glow sprite size tracks activity
+    // Opacity: 0.5 (dormant) to 0.95 (max activity)
+    const targetOpacity = (0.5 + activity * 0.45) * dimFactor;
+    mat.opacity = THREE.MathUtils.lerp(mat.opacity, targetOpacity, 0.1);
+
+    // Glow sprite
     if (spriteRef.current) {
       const glowSize = (0.15 + activity * 0.35) * focusScale * dimFactor;
       spriteRef.current.scale.setScalar(glowSize);
@@ -122,7 +123,7 @@ export default function BrainRegion({ id, data }) {
       );
     }
 
-    // Dashed line needs computeLineDistances for dashes to render
+    // Dashed depth anchor line
     if (lineRef.current && !lineRef.current._dashInit) {
       lineRef.current.computeLineDistances();
       lineRef.current._dashInit = true;
@@ -131,27 +132,41 @@ export default function BrainRegion({ id, data }) {
 
   return (
     <group position={pos}>
-      {/* Core node mesh */}
+      {/* Invisible hitbox for reliable clicking */}
       <mesh
-        ref={meshRef}
+        visible={false}
         onClick={(e) => { e.stopPropagation(); setFocusedRegion(id); }}
         onPointerOver={(e) => { e.stopPropagation(); setHoveredRegion(id); document.body.style.cursor = 'pointer'; }}
         onPointerOut={() => { setHoveredRegion(null); document.body.style.cursor = 'default'; }}
       >
-        {deep
-          ? <icosahedronGeometry args={[1, 1]} />
-          : <sphereGeometry args={[1, 16, 12]} />
-        }
-        <meshStandardMaterial
+        <sphereGeometry args={[Math.max(...baseScale) * 1.5, 8, 6]} />
+        <meshBasicMaterial />
+      </mesh>
+
+      {/* Anatomical region mesh */}
+      <mesh
+        ref={meshRef}
+        geometry={geometry}
+        onClick={(e) => { e.stopPropagation(); setFocusedRegion(id); }}
+        onPointerOver={(e) => { e.stopPropagation(); setHoveredRegion(id); document.body.style.cursor = 'pointer'; }}
+        onPointerOut={() => { setHoveredRegion(null); document.body.style.cursor = 'default'; }}
+      >
+        <meshPhysicalMaterial
           color={color}
           emissive={color}
           emissiveIntensity={0.5}
           transparent
           opacity={0.8}
-          roughness={0.3}
-          metalness={0.1}
+          roughness={0.55}
+          metalness={0.0}
+          clearcoat={0.3}
+          clearcoatRoughness={0.4}
+          sheen={0.8}
+          sheenRoughness={0.5}
+          sheenColor={color}
           toneMapped={false}
           depthWrite={false}
+          side={THREE.DoubleSide}
         />
       </mesh>
 
@@ -167,7 +182,26 @@ export default function BrainRegion({ id, data }) {
         />
       </sprite>
 
-      {/* Label on hover/focus */}
+      {/* Always-visible abbreviated label */}
+      <Html
+        center
+        distanceFactor={5}
+        style={{
+          pointerEvents: 'none',
+          whiteSpace: 'nowrap',
+          color: color,
+          fontSize: '10px',
+          fontFamily: 'monospace',
+          fontWeight: 'bold',
+          textShadow: '0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.5)',
+          opacity: 0.85,
+          transform: 'translateY(-16px)',
+        }}
+      >
+        {ABBREV[id] || id.toUpperCase()}
+      </Html>
+
+      {/* Expanded label on hover/focus */}
       {showLabel && (
         <Html
           center
@@ -175,27 +209,26 @@ export default function BrainRegion({ id, data }) {
           style={{
             pointerEvents: 'none',
             whiteSpace: 'nowrap',
-            background: 'rgba(0,0,0,0.75)',
+            background: 'rgba(0,0,0,0.8)',
             color: '#fff',
-            padding: '3px 8px',
+            padding: '4px 10px',
             borderRadius: '4px',
-            fontSize: '11px',
+            fontSize: '12px',
             fontFamily: 'monospace',
             border: `1px solid ${color}`,
-            transform: 'translateY(-24px)',
+            transform: 'translateY(-32px)',
           }}
         >
           {data.name} — <ActivityLabel stateKey={stateKey} />
         </Html>
       )}
 
-      {/* Depth anchor line for deep regions */}
-      {deep && <DepthAnchorLine pos={pos} lineRef={lineRef} />}
+      {/* Depth anchor line — colored by region */}
+      {deep && <DepthAnchorLine pos={pos} color={color} lineRef={lineRef} />}
     </group>
   );
 }
 
-/** Live activity % readout */
 function ActivityLabel({ stateKey }) {
   const getEffectiveState = useStore(s => s.getEffectiveState);
   const state = getEffectiveState();
@@ -203,10 +236,9 @@ function ActivityLabel({ stateKey }) {
   return <span style={{ color: '#a5b4fc' }}>{val}%</span>;
 }
 
-/** Depth anchor line component (rendered inside the group at pos) */
-function DepthAnchorLine({ pos, lineRef }) {
+function DepthAnchorLine({ pos, color, lineRef }) {
   const points = useMemo(() => {
-    const origin = new THREE.Vector3(0, 0, 0); // relative to group
+    const origin = new THREE.Vector3(0, 0, 0);
     const dir = new THREE.Vector3(...pos).normalize().multiplyScalar(1.05).sub(new THREE.Vector3(...pos));
     return new Float32Array([0, 0, 0, dir.x, dir.y, dir.z]);
   }, [pos]);
@@ -222,9 +254,9 @@ function DepthAnchorLine({ pos, lineRef }) {
         />
       </bufferGeometry>
       <lineDashedMaterial
-        color="#ffffff"
+        color={color}
         transparent
-        opacity={0.1}
+        opacity={0.15}
         dashSize={0.03}
         gapSize={0.03}
         depthWrite={false}
